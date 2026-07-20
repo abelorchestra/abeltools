@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, ChevronLeft, ChevronRight, Download, FileCheck2, KeyRound, LoaderCircle, Plus, RotateCcw, Save, Trash2, Upload } from "lucide-react";
+import { Archive, ChevronLeft, ChevronRight, Download, FileCheck2, FilePlus2, History, KeyRound, LoaderCircle, Plus, Save, Settings2, Trash2, Upload } from "lucide-react";
 import { type ChangeEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,24 @@ import {
 
 const MAX_SAVED_FSTS = 16;
 const SAVED_FSTS_STORAGE_KEY = "brsofriend.saved-fsts";
+const DEFAULT_NAME_STORAGE_KEY = "brsofriend.default-name";
+const UI_SETTINGS_STORAGE_KEY = "brsofriend.ui-settings";
+const CHANNEL_COLOR_STORAGE_KEY = "brsofriend.channel-color";
+const COLOR_HISTORY_STORAGE_KEY = "brsofriend.color-history";
+const MAX_COLOR_HISTORY = 12;
 const KEY_MAPPINGS_PER_PAGE = 12;
+
+interface UiSettings {
+  showDefaultName: boolean;
+  showDebugTools: boolean;
+  showKeyMapping: boolean;
+}
+
+const INITIAL_UI_SETTINGS: UiSettings = {
+  showDefaultName: true,
+  showDebugTools: false,
+  showKeyMapping: false,
+};
 
 const ARTICULATION_COLORS = [
   { source: "#9ED1A5", light: "#C0E1C5" },
@@ -136,7 +153,9 @@ export function FstWorkspace() {
   const [decoded, setDecoded] = useState<DecodedFst | null>(null);
   const [templateBuffer, setTemplateBuffer] = useState<ArrayBuffer | null>(null);
   const [channelColor, setChannelColor] = useState("#995555");
+  const [colorHistory, setColorHistory] = useState<string[]>([]);
   const [presetName, setPresetName] = useState("brsofriend");
+  const [defaultName, setDefaultName] = useState("brsofriend");
   const [keyswitchInit, setKeyswitchInit] = useState(0);
   const [settings, setSettings] = useState<BrsoSettings | null>(null);
   const [noteDrafts, setNoteDrafts] = useState<string[]>([]);
@@ -146,12 +165,21 @@ export function FstWorkspace() {
   const [savedFsts, setSavedFsts] = useState<SavedFst[]>([]);
   const [savedFstsLoaded, setSavedFstsLoaded] = useState(false);
   const [keyMappingPage, setKeyMappingPage] = useState(0);
+  const [uiSettings, setUiSettings] = useState<UiSettings>(INITIAL_UI_SETTINGS);
 
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
       try {
+        const storedDefaultName = localStorage.getItem(DEFAULT_NAME_STORAGE_KEY);
+        if (storedDefaultName) setDefaultName(storedDefaultName);
+        const storedUiSettings = localStorage.getItem(UI_SETTINGS_STORAGE_KEY);
+        if (storedUiSettings) setUiSettings({ ...INITIAL_UI_SETTINGS, ...JSON.parse(storedUiSettings) });
+        const storedChannelColor = localStorage.getItem(CHANNEL_COLOR_STORAGE_KEY);
+        if (storedChannelColor) setChannelColor(storedChannelColor);
+        const storedColorHistory = localStorage.getItem(COLOR_HISTORY_STORAGE_KEY);
+        if (storedColorHistory) setColorHistory(JSON.parse(storedColorHistory));
         const stored = sessionStorage.getItem(SAVED_FSTS_STORAGE_KEY);
         if (stored) {
           const parsed = JSON.parse(stored) as Array<{ name: string; data: string; articulationCount: number; channelColor?: string }>;
@@ -196,12 +224,39 @@ export function FstWorkspace() {
       : null;
   const hasErrors = validationErrors.length > 0 || noteErrors.some(Boolean) || Boolean(presetNameError);
 
-  function loadSettings(next: BrsoSettings, file: File | null, metadata: DecodedFst | null, template?: ArrayBuffer | null, nextName?: string) {
+  function updateDefaultName(value: string) {
+    const next = value.replace(/\.fst$/i, "").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "");
+    setDefaultName(next);
+    if (next.trim()) localStorage.setItem(DEFAULT_NAME_STORAGE_KEY, next.trim());
+    else localStorage.removeItem(DEFAULT_NAME_STORAGE_KEY);
+  }
+
+  function updateUiSetting<K extends keyof UiSettings>(key: K, value: UiSettings[K]) {
+    setUiSettings((current) => {
+      const next = { ...current, [key]: value };
+      localStorage.setItem(UI_SETTINGS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function selectChannelColor(color: string) {
+    const normalized = color.toUpperCase();
+    setChannelColor(normalized);
+    localStorage.setItem(CHANNEL_COLOR_STORAGE_KEY, normalized);
+    setColorHistory((current) => {
+      const next = [normalized, ...current.filter((item) => item !== normalized)].slice(0, MAX_COLOR_HISTORY);
+      localStorage.setItem(COLOR_HISTORY_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function loadSettings(next: BrsoSettings, file: File | null, metadata: DecodedFst | null, template?: ArrayBuffer | null, nextName?: string, colorOverride?: string) {
     setSettings(structuredClone(next));
     setSelectedFile(file);
     setDecoded(metadata);
     if (template !== undefined) setTemplateBuffer(template);
-    if (metadata?.metadata.channelColorHex) setChannelColor(metadata.metadata.channelColorHex);
+    const nextColor = colorOverride ?? metadata?.metadata.channelColorHex;
+    if (nextColor) selectChannelColor(nextColor);
     if (nextName !== undefined) setPresetName(nextName);
     setNoteDrafts(initialDrafts(next));
     setNoteErrors(next.Articulations.map(() => null));
@@ -237,7 +292,8 @@ export function FstWorkspace() {
       if (!response.ok) throw new Error("내장 Default FST 템플릿을 불러오지 못했습니다.");
       const buffer = await response.arrayBuffer();
       const template = decodeFst(buffer);
-      loadSettings(createDefaultBrsoSettings(), null, template, buffer, "brsofriend");
+      const nextName = uiSettings.showDefaultName ? defaultName.trim() || "brsofriend" : "brsofriend";
+      loadSettings(createDefaultBrsoSettings(), null, template, buffer, nextName, channelColor);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Default 설정을 시작하지 못했습니다.");
     } finally {
@@ -385,60 +441,120 @@ export function FstWorkspace() {
     <section className="mt-10 w-full rounded-[1.5rem] border border-[#e1e5dc] bg-white/70 p-5 text-left shadow-xl shadow-[#263d2c]/5 sm:p-7">
       <input ref={inputRef} type="file" accept=".fst" onChange={handleFileChange} className="sr-only" aria-label="FST 파일 선택" />
 
+      <div className="mb-6 rounded-xl border border-[#d9ded4] bg-[#f7f8f4] p-4">
+        <p className="flex items-center gap-2 text-sm font-bold uppercase tracking-[0.14em] text-[#5b7f44]"><Settings2 className="size-4" /> Settings</p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          {([
+            ["showDefaultName", "Default File Name 설정"],
+            ["showDebugTools", "Debug 기능"],
+            ["showKeyMapping", "Key Mapping 보기"],
+          ] as const).map(([key, label]) => (
+            <label key={key} className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[#e1e5dc] bg-white px-3 py-2.5 text-sm font-bold text-[#596057]">
+              <span>{label}</span>
+              <span className="relative inline-flex">
+                <input type="checkbox" checked={uiSettings[key]} onChange={(event) => updateUiSetting(key, event.target.checked)} className="peer sr-only" />
+                <span className="h-6 w-11 rounded-full bg-[#d9ded4] transition-colors peer-checked:bg-[#5b7f44]" />
+                <span className="absolute left-1 top-1 size-4 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-5" />
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+
       <div className="flex flex-col gap-5">
         <div>
           <p className="text-sm font-bold uppercase tracking-[0.16em] text-[#5b7f44]">BRSOFRIEND EDITOR</p>
           <h2 className="mt-2 text-2xl font-bold tracking-[-0.03em]">Articulation 편집</h2>
           <p className="mt-2 max-w-xl text-sm leading-6 text-[#666b64]">FST를 불러오거나 기본 설정으로 시작하세요. 업로드한 FST를 템플릿으로 편집본을 다시 만들 수 있습니다.</p>
         </div>
-        <div className="grid w-full grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-          <Button type="button" size="lg" onClick={() => inputRef.current?.click()} disabled={isReading} className="h-11 rounded-full bg-[#172d23] px-5 text-white hover:bg-[#244334]">
-            {isReading ? <LoaderCircle className="animate-spin" /> : <Upload />} {isReading ? "Reading…" : "Upload FST"}
-          </Button>
-          <Button type="button" size="lg" variant="outline" onClick={startDefault} disabled={isReading} className="h-11 rounded-full px-5"><RotateCcw /> Default</Button>
-          <Button type="button" size="lg" variant="outline" onClick={handleFstExport} disabled={!settings || !templateBuffer || hasErrors} title={!templateBuffer ? "먼저 FST 템플릿을 업로드하세요." : undefined} className="h-11 rounded-full px-5"><Download /> Export FST</Button>
-          <Button type="button" size="lg" variant="outline" onClick={saveCurrentFst} disabled={!settings || !templateBuffer || hasErrors} className="h-11 rounded-full px-5"><Save /> Save FST</Button>
-          <Button type="button" size="lg" variant="outline" onClick={handleJsonExport} disabled={!settings || hasErrors} className="h-11 rounded-full px-5"><Download /> JSON</Button>
+        {uiSettings.showDefaultName && <label className="max-w-md text-xs font-bold uppercase tracking-wider text-[#72776f]">DEFAULT FILE NAME
+          <div className="mt-2 flex items-center rounded-lg border border-[#d9ded4] bg-white focus-within:border-[#5b7f44]">
+            <input value={defaultName} onChange={(event) => updateDefaultName(event.target.value)} className="h-10 min-w-0 flex-1 rounded-l-lg bg-transparent px-3 text-sm font-normal normal-case tracking-normal text-[#17201a] outline-none" placeholder="nucleus-strings" />
+            <span className="border-l border-[#e1e5dc] px-3 font-mono text-sm font-normal normal-case tracking-normal text-[#72776f]">.fst</span>
+          </div>
+          <span className="mt-1.5 block font-normal normal-case tracking-normal text-[#8c9189]">다음 Create FST 시작 시 사용할 파일명입니다.</span>
+        </label>}
+        <div className="flex w-full flex-col gap-3">
+          <div className="sm:w-56">
+            <Button type="button" size="lg" onClick={startDefault} disabled={isReading} className="h-11 w-full rounded-full bg-[#5b7f44] px-5 text-white hover:bg-[#4b6c39]"><FilePlus2 /> Create FST</Button>
+          </div>
+          {uiSettings.showDebugTools && <div className="flex flex-col gap-3 rounded-xl bg-[#202823] p-3 sm:flex-row sm:items-center">
+            <span className="shrink-0 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-white/55">Debug Tools</span>
+            <div className="grid flex-1 grid-cols-2 gap-2">
+              <Button type="button" size="lg" variant="outline" onClick={() => inputRef.current?.click()} disabled={isReading} className="h-10 rounded-full border-dashed border-white/25 bg-white/10 px-5 text-white hover:bg-white/20 hover:text-white">
+                {isReading ? <LoaderCircle className="animate-spin" /> : <Upload />} {isReading ? "Reading…" : "Upload FST"}
+              </Button>
+              <Button type="button" size="lg" variant="outline" onClick={handleJsonExport} disabled={!settings || hasErrors} className="h-10 rounded-full border-dashed border-white/25 bg-white/10 px-5 text-white hover:bg-white/20 hover:text-white"><Download /> JSON</Button>
+            </div>
+          </div>}
         </div>
       </div>
 
-      <div className="mt-6 rounded-xl border border-dashed border-[#cad4c3] p-5">
+      {uiSettings.showDebugTools && <div
+        className="mt-6 rounded-xl border border-dashed bg-[#202823] p-5 text-white transition-colors"
+        style={settings ? { background: `linear-gradient(${channelColor}30, ${channelColor}30), #202823`, borderColor: channelColor } : { borderColor: "#667168" }}
+      >
         {settings ? (
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3"><FileCheck2 className="size-6 text-[#5b7f44]" /><div><p className="font-bold">{selectedFile?.name ?? "새 BRSO 설정"}</p><p className="mt-1 text-xs text-[#666b64]">{selectedFile ? `${formatFileSize(selectedFile.size)} · ` : ""}{settings.Articulations.length}/{MAX_ARTICULATIONS} articulations</p></div></div>
-            {decoded && <span className="rounded-full bg-[#eaf1e2] px-3 py-1.5 text-xs font-bold text-[#5b7f44]">BRSO v{decoded.metadata.brsoFormatVersion}</span>}
+            <div className="flex items-center gap-3"><FileCheck2 className="size-6" style={{ color: channelColor }} /><div><p className="font-bold">{selectedFile?.name ?? `${presetName || defaultName || "brsofriend"}.fst`}</p><p className="mt-1 text-xs text-white/60">{selectedFile ? `${formatFileSize(selectedFile.size)} · ` : ""}{settings.Articulations.length}/{MAX_ARTICULATIONS} articulations</p></div></div>
+            {decoded && <span className="rounded-full border px-3 py-1.5 text-xs font-bold text-white" style={{ backgroundColor: `${channelColor}55`, borderColor: channelColor }}>BRSO v{decoded.metadata.brsoFormatVersion}</span>}
           </div>
-        ) : <p className="text-sm text-[#666b64]">FST 파일을 선택하거나 Default 버튼으로 새 설정을 시작하세요.</p>}
-        {error && <p role="alert" className="mt-3 text-sm font-bold text-destructive">{error}</p>}
-      </div>
-
+        ) : <p className="text-sm text-white/65">Create FST 버튼으로 새 설정을 시작하거나 Debug Tools에서 FST 파일을 불러오세요.</p>}
+        {error && <p role="alert" className="mt-3 text-sm font-bold text-red-300">{error}</p>}
+      </div>}
       {settings && (
         <div className="mt-5 space-y-5">
-          <div className="rounded-xl border border-[#e1e5dc] bg-[#f7f8f4] p-4">
-            <label className="block text-xs font-bold uppercase tracking-wider text-[#72776f]">FST FILE NAME
-              <div className="mt-2 flex items-center rounded-lg border border-[#d9ded4] bg-white focus-within:border-[#5b7f44]">
-                <input value={presetName} onChange={(event) => setPresetName(event.target.value.replace(/\.fst$/i, ""))} aria-invalid={Boolean(presetNameError)} className="h-10 min-w-0 flex-1 rounded-l-lg bg-transparent px-3 text-sm font-normal normal-case tracking-normal text-[#17201a] outline-none aria-invalid:text-red-700" placeholder="brsofriend" />
-                <span className="border-l border-[#e1e5dc] px-3 font-mono text-sm font-normal normal-case tracking-normal text-[#72776f]">.fst</span>
+          <div
+            className="overflow-visible rounded-xl border p-3 transition-colors"
+            style={{ backgroundColor: `${channelColor}18`, borderColor: `${channelColor}55` }}
+          >
+            <div className="space-y-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <label className="min-w-0 flex-1 text-xs font-bold uppercase tracking-wider text-[#596057]">INSTRUMENT NAME
+                  <div className="mt-2 flex items-center rounded-lg border border-white/70 bg-white focus-within:border-[#5b7f44]">
+                    <input value={presetName} onChange={(event) => setPresetName(event.target.value.replace(/\.fst$/i, ""))} aria-invalid={Boolean(presetNameError)} className="h-10 min-w-0 flex-1 rounded-l-lg bg-transparent px-3 text-sm font-normal normal-case tracking-normal text-[#17201a] outline-none aria-invalid:text-red-700" placeholder="brsofriend" />
+                    <span className="border-l border-[#e1e5dc] px-3 font-mono text-sm font-normal normal-case tracking-normal text-[#72776f]">.fst</span>
+                  </div>
+                </label>
+                <label className="relative flex h-11 cursor-pointer items-center gap-2 overflow-hidden rounded-xl bg-white px-2.5 shadow-sm ring-1 ring-black/10 hover:bg-[#fafbf8]" title="현재 색상 변경">
+                  <input type="color" value={channelColor} onChange={(event) => selectChannelColor(event.target.value)} className="absolute inset-0 size-full cursor-pointer opacity-0" />
+                  <span className="size-7 rounded-lg border border-black/15 shadow-sm" style={{ backgroundColor: channelColor }} />
+                  <span className="font-mono text-xs font-bold text-[#17201a]">{channelColor}</span>
+                  <span className="sr-only">현재 Channel Color 선택</span>
+                </label>
               </div>
-            </label>
-            {presetNameError && <p className="mt-2 text-xs font-bold text-red-600">{presetNameError}</p>}
-          </div>
+              {presetNameError && <p className="text-xs font-bold text-red-600">{presetNameError}</p>}
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-2 rounded-xl bg-[#202823] p-2 shadow-inner" aria-label="Channel color presets">
+                  <span className="mr-1 text-[0.6rem] font-bold uppercase tracking-[0.12em] text-white/55">Palette</span>
+                  {["#995555", "#B3983C", "#5B7F44", "#3D7F88", "#4F68A8", "#795AA6", "#A65776", "#777777"].map((color) => (
+                    <button key={color} type="button" onClick={() => selectChannelColor(color)} aria-label={`색상 ${color}`} aria-pressed={channelColor === color} className="size-8 rounded-full border-2 border-white/80 shadow-sm outline outline-1 outline-black/25 transition-transform hover:scale-110 aria-pressed:outline-2 aria-pressed:outline-white" style={{ backgroundColor: color }} />
+                  ))}
+                </div>
+                <label className="flex h-12 cursor-pointer items-center gap-2 rounded-xl bg-white px-2.5 shadow-sm ring-1 ring-black/10" title="사용자 색상 선택">
+                  <span className="relative size-8 overflow-hidden rounded-full border-2 border-white shadow-sm ring-1 ring-black/15" style={{ background: "conic-gradient(#ff3b30, #ffcc00, #34c759, #00c7be, #007aff, #af52de, #ff2d55, #ff3b30)" }}>
+                    <input type="color" value={channelColor} onChange={(event) => selectChannelColor(event.target.value)} className="absolute inset-0 size-full cursor-pointer opacity-0" />
+                  </span>
+                  <span className="text-xs font-bold text-[#596057]">Picker</span>
+                </label>
+                <details className="group relative">
+                  <summary className="flex h-12 cursor-pointer list-none items-center gap-2 rounded-xl bg-white px-3 text-xs font-bold text-[#596057] shadow-sm ring-1 ring-black/10 hover:bg-[#fafbf8]"><History className="size-4" /> History</summary>
+                  <div className="absolute right-0 z-40 mt-2 w-56 rounded-xl border border-[#d9ded4] bg-white p-3 shadow-xl">
+                    <div className="flex items-center justify-between"><p className="text-xs font-bold uppercase tracking-wider text-[#72776f]">Color History</p><span className="text-[0.65rem] text-[#8c9189]">{colorHistory.length}/{MAX_COLOR_HISTORY}</span></div>
+                    {colorHistory.length > 0 ? <div className="mt-3 grid grid-cols-4 gap-2">
+                      {colorHistory.map((color) => <button key={color} type="button" onClick={(event) => { selectChannelColor(color); event.currentTarget.closest("details")?.removeAttribute("open"); }} aria-label={`최근 색상 ${color}`} title={color} aria-pressed={channelColor === color} className="aspect-square rounded-lg border-2 border-white shadow-sm outline outline-1 outline-black/15 aria-pressed:outline-2 aria-pressed:outline-[#172d23]" style={{ backgroundColor: color }} />)}
+                    </div> : <p className="mt-3 text-xs text-[#8c9189]">사용한 색상이 아직 없습니다.</p>}
+                  </div>
+                </details>
 
-          <div className="rounded-xl border border-[#e1e5dc] bg-[#f7f8f4] p-4">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div><p className="font-bold">CHANNEL COLOR</p><p className="mt-1 text-xs text-[#72776f]">FL Studio 채널에 저장할 색상을 선택하세요.</p></div>
-              <div className="flex flex-wrap items-center gap-2">
-                {["#995555", "#b3983c", "#5b7f44", "#3d7f88", "#4f68a8", "#795aa6", "#a65776", "#777777"].map((color) => (
-                  <button key={color} type="button" onClick={() => setChannelColor(color)} aria-label={`색상 ${color}`} aria-pressed={channelColor === color} className="size-8 rounded-full border-2 border-white shadow-sm outline outline-1 outline-[#d5d9d0] aria-pressed:outline-2 aria-pressed:outline-[#172d23]" style={{ backgroundColor: color }} />
-                ))}
-                <label className="relative size-9 overflow-hidden rounded-full border-2 border-white shadow-sm outline outline-1 outline-[#d5d9d0]" title="사용자 색상"><input type="color" value={channelColor} onChange={(event) => setChannelColor(event.target.value)} className="absolute -inset-2 size-14 cursor-pointer border-0" /><span className="sr-only">사용자 색상 선택</span></label>
-                <span className="ml-1 font-mono text-xs font-bold">{channelColor.toUpperCase()}</span>
               </div>
             </div>
-            {!templateBuffer && <p className="mt-3 rounded-lg bg-[#fff7df] px-3 py-2 text-xs text-[#755d16]">Default 버튼을 누르거나 기준 FST를 업로드하면 FST export를 사용할 수 있습니다.</p>}
+            {!templateBuffer && <p className="mt-3 rounded-lg bg-[#fff7df] px-3 py-2 text-xs text-[#755d16]">Create FST를 누르거나 기준 FST를 업로드하면 FST export를 사용할 수 있습니다.</p>}
           </div>
+
+
           <div className="rounded-xl border border-[#e1e5dc]">
-            <div className="flex flex-col gap-3 rounded-t-xl border-b border-[#e1e5dc] bg-[#f7f8f4] px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-bold">ARTICULATIONS</p><p className="mt-1 text-xs text-[#72776f]">Enter를 누르면 다음 행으로 이동하며 마지막 행에서는 Note가 1 증가한 새 행을 만듭니다.</p></div><div className="flex flex-wrap items-center gap-2"><label className="mr-1 flex items-center gap-2 text-xs font-bold text-[#72776f]">Keyswitch Init<input type="number" min={0} max={128} value={keyswitchInit} onChange={(event) => updateKeyswitchInit(event.target.value)} className="h-8 w-16 rounded-lg border border-[#d9ded4] bg-white px-2 font-mono text-sm text-[#17201a]" /><span className="min-w-10 font-mono text-[#5b7f44]">({noteNumberToName(keyswitchInit)})</span></label><Button type="button" size="sm" onClick={() => addArticulation()} disabled={settings.Articulations.length >= MAX_ARTICULATIONS}><Plus /> 추가</Button><Button type="button" size="sm" variant="outline" onClick={clearArticulations} disabled={settings.Articulations.length === 0} className="text-[#8b4a4a] hover:bg-red-50 hover:text-red-700"><Trash2 /> 비우기</Button></div></div>
+            <div className="flex flex-col gap-3 rounded-t-xl border-b border-[#e1e5dc] bg-[#f7f8f4] px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-bold">ARTICULATIONS</p><p className="mt-1 text-xs text-[#72776f]">Enter를 누르면 다음 행으로 이동헙나다.</p></div><div className="flex flex-wrap items-center gap-2"><label className="mr-1 flex items-center gap-2 text-xs font-bold text-[#72776f]">Keyswitch Init<input type="number" min={0} max={128} value={keyswitchInit} onChange={(event) => updateKeyswitchInit(event.target.value)} className="h-8 w-16 rounded-lg border border-[#d9ded4] bg-white px-2 font-mono text-sm text-[#17201a]" /><span className="min-w-10 font-mono text-[#5b7f44]">({noteNumberToName(keyswitchInit)})</span></label><Button type="button" size="sm" onClick={() => addArticulation()} disabled={settings.Articulations.length >= MAX_ARTICULATIONS}><Plus /> 추가</Button><Button type="button" size="sm" variant="outline" onClick={clearArticulations} disabled={settings.Articulations.length === 0} className="text-[#8b4a4a] hover:bg-red-50 hover:text-red-700"><Trash2 /> 비우기</Button></div></div>
             <div className="divide-y divide-[#edf0e9]">
               {settings.Articulations.map((articulation, index) => (
                 <div
@@ -460,7 +576,7 @@ export function FstWorkspace() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-[#e1e5dc]">
+          {uiSettings.showKeyMapping && <div className="rounded-xl border border-[#e1e5dc]">
             <div className="flex flex-col gap-3 border-b border-[#e1e5dc] bg-[#f7f8f4] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div><p className="flex items-center gap-2 font-bold"><KeyRound className="size-4" /> KEY MAPPING</p><p className="mt-1 text-xs text-[#72776f]">FST에서 발견된 비어 있지 않은 Key Mapping만 표시합니다. 읽기 전용이며 export 시 그대로 보존됩니다.</p></div>
               {keyMappings.length > 0 && <span className="shrink-0 rounded-full bg-[#eef0eb] px-3 py-1.5 text-xs font-bold text-[#72776f]">{keyMappings.length} mappings</span>}
@@ -484,9 +600,14 @@ export function FstWorkspace() {
                 </div>
               )}
             </div>
-          </div>
+          </div>}
 
           {hasErrors && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"><p className="font-bold">입력 오류가 있어 export할 수 없습니다.</p><p className="mt-1 text-xs">{presetNameError ?? noteErrors.find(Boolean) ?? validationErrors[0]?.message}</p></div>}
+
+          <div className="z-20 flex flex-col gap-2 rounded-2xl border border-[#d9ded4] bg-white/90 p-3 shadow-lg shadow-[#263d2c]/10 backdrop-blur sm:flex-row sm:justify-end lg:sticky lg:bottom-4">
+            <Button type="button" size="lg" onClick={saveCurrentFst} disabled={!templateBuffer || hasErrors} className="h-11 rounded-full bg-[#3d7f88] px-6 text-white hover:bg-[#326c74]"><Save /> Save FST</Button>
+            <Button type="button" size="lg" onClick={handleFstExport} disabled={!templateBuffer || hasErrors} title={!templateBuffer ? "먼저 FST 템플릿을 업로드하세요." : undefined} className="h-11 rounded-full bg-[#b3983c] px-6 text-white hover:bg-[#987f2f]"><Download /> Export FST</Button>
+          </div>
         </div>
       )}
     </section>
