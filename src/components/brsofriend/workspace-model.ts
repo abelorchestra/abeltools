@@ -14,12 +14,14 @@ export interface UiSettings {
   showDefaultName: boolean;
   showDebugTools: boolean;
   showKeyMapping: boolean;
+  brsoInstanceId: string;
 }
 
 export const INITIAL_UI_SETTINGS: UiSettings = {
   showDefaultName: true,
   showDebugTools: false,
   showKeyMapping: false,
+  brsoInstanceId: "",
 };
 
 export interface SavedFst {
