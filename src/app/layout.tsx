@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 
+import { SiteI18nProvider } from "@/components/layout/site-i18n";
+
 import "./globals.css";
 
 const maplestory = localFont({
@@ -28,7 +30,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="ko" className={`${maplestory.variable} h-full antialiased`}>
-      <body className="flex min-h-full flex-col">{children}</body>
+      <body className="flex min-h-full flex-col"><SiteI18nProvider>{children}</SiteI18nProvider></body>
     </html>
   );
 }
